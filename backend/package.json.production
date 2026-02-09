@@ -1,0 +1,38 @@
+{
+  "name": "butterfly-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 4000",
+    "build": "NODE_ENV=production next build",
+    "start": "NODE_ENV=production next start -p 4000",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@genkit-ai/google-genai": "^1.20.0",
+    "@prisma/adapter-pg": "^7.3.0",
+    "@prisma/client": "^7.3.0",
+    "dotenv": "^16.5.0",
+    "genkit": "^1.20.0",
+    "genkitx-ollama": "^1.20.0",
+    "ioredis": "^5.9.2",
+    "next": "15.5.9",
+    "pg": "^8.18.0",
+    "prisma": "^7.3.0",
+    "ws": "^8.19.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/pg": "^8.16.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  }
+}

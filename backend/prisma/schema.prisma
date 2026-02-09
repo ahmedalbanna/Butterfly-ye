@@ -1,0 +1,292 @@
+// LuxeFinds E-commerce Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Categories
+model Category {
+  id           String    @id @default(cuid())
+  name         String    @unique
+  slug         String    @unique
+  description  String?   @db.Text
+  displayOrder Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  products Product[]
+
+  @@index([slug])
+  @@index([displayOrder])
+}
+
+// Products
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  price       Float
+  description String   @db.Text
+  materials   String   @db.Text
+  care        String   @db.Text
+  image       String   // Primary image URL
+  images      String[] // Array of image URLs
+  modelImages String[] @default([]) // AI-generated model photos showing accessories being worn
+  video       String?  // Optional video URL (MP4, WebM, etc.)
+  featured    Boolean  @default(false)
+  stock       Int      @default(100)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  orderItems OrderItem[]
+  cartItems  CartItem[]
+  socialMediaPosts SocialMediaPost[]
+
+  @@index([categoryId])
+  @@index([featured])
+}
+
+// Users (prepared for future authentication)
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  orders       Order[]
+  cart         Cart?
+  chatSessions ChatSession[]
+  customOrders CustomOrder[]
+}
+
+// Shopping Cart
+model Cart {
+  id        String     @id @default(cuid())
+  userId    String     @unique
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  cartId    String
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cartId, productId])
+  @@index([cartId])
+}
+
+// Orders
+model Order {
+  id              String      @id @default(cuid())
+  userId          String?
+  user            User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  status          String      @default("pending") // pending, confirmed, shipped, delivered, cancelled
+  total           Float
+  shippingAddress String      @db.Text
+  billingAddress  String      @db.Text
+  customerEmail   String
+  customerName    String
+  customerPhone   String?
+  paymentMethod   String      @default("credit_card") // bank_transfer, credit_card, crypto, concierge
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  items       OrderItem[]
+  messages    CustomerMessage[]
+  customOrder CustomOrder?
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  quantity  Int
+  price     Float    // Price at time of purchase
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+}
+
+// AI Stylist Chat History
+model ChatSession {
+  id        String    @id @default(cuid())
+  userId    String?
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sessionId String    @unique // Client-generated session ID
+  messages  Json      // Array of {role, content, timestamp}
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
+// Customer Messages (Contact/Support System)
+model CustomerMessage {
+  id            String         @id @default(cuid())
+  customerName  String
+  customerEmail String
+  customerPhone String?
+  subject       String
+  message       String         @db.Text
+  orderId       String?
+  type          String         @default("form") // "form" or "chat"
+  isActive      Boolean        @default(false) // For live chat sessions
+  status        String         @default("unread") // unread, read, replied, resolved
+  priority      String         @default("normal") // low, normal, high, urgent
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  // Relations
+  order              Order?            @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  replies            MessageReply[]
+  activeChatSession  ActiveChatSession?
+
+  @@index([status])
+  @@index([priority])
+  @@index([orderId])
+  @@index([createdAt])
+  @@index([customerEmail])
+  @@index([type])
+  @@index([isActive])
+}
+
+model MessageReply {
+  id        String          @id @default(cuid())
+  messageId String
+  message   CustomerMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  sender    String          // "customer" or "admin"
+  content   String          @db.Text
+  createdAt DateTime        @default(now())
+
+  @@index([messageId])
+  @@index([createdAt])
+}
+
+// Active Chat Sessions for WebSocket Management
+model ActiveChatSession {
+  id                String          @id @default(cuid())
+  messageId         String          @unique
+  message           CustomerMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  customerConnected Boolean         @default(false)
+  adminConnected    Boolean         @default(false)
+  adminName         String?         // Name of admin handling the chat
+  createdAt         DateTime        @default(now())
+  lastActivity      DateTime        @default(now())
+
+  @@index([customerConnected])
+  @@index([adminConnected])
+  @@index([lastActivity])
+}
+
+// Voice Call Sessions (WebRTC)
+model VoiceCallSession {
+  id           String    @id @default(cuid())
+  customerId   String    // Anonymous or guest ID
+  customerName String
+  status       String    @default("ringing") // ringing, active, ended, missed, declined
+  startedAt    DateTime  @default(now())
+  endedAt      DateTime?
+  duration     Int?      // Call duration in seconds
+  adminId      String?   // Admin who answered
+  adminName    String?   // Name of admin who answered
+  recordingUrl String?   // URL to recorded audio file
+  recordingSize Int?     // Recording file size in bytes
+
+  @@index([status])
+  @@index([startedAt])
+  @@index([customerId])
+}
+
+// Social Media Posts (n8n Integration)
+model SocialMediaPost {
+  id          String    @id @default(cuid())
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  platform    String    // facebook, instagram, twitter, pinterest, tiktok
+  status      String    @default("pending") // pending, published, failed
+  postUrl     String?   // URL to the published post
+  errorMessage String?  @db.Text // Error details if failed
+  metadata    Json?     // Platform-specific metadata (post ID, engagement stats, etc.)
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([productId])
+  @@index([platform])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Custom-Made Accessory Orders
+model CustomOrder {
+  id              String    @id @default(cuid())
+  customerId      String?   // Links to User if authenticated
+  customerName    String
+  customerEmail   String
+  customerPhone   String?
+  description     String    @db.Text // Customer's description of what they want
+  referenceImages String[]  // Array of uploaded image URLs
+  status          String    @default("pending") // pending, quoted, approved, in_production, completed, cancelled
+  quotedPrice     Float?    // Admin's quoted price
+  quoteNotes      String?   @db.Text // Admin notes on the quote
+  quotedAt        DateTime?
+  approvedAt      DateTime?
+  completedAt     DateTime?
+  orderId         String?   @unique // Links to final Order when approved
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  // Relations
+  user  User?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  
+  @@index([customerId])
+  @@index([status])
+  @@index([customerEmail])
+  @@index([createdAt])
+}
+
+// Event Store for CDC Event Replay and Event Sourcing
+model CDCEvent {
+  id            String   @id @default(cuid())
+  eventType     String
+  aggregateType String
+  aggregateId   String
+  operation     String
+  payload       Json
+  metadata      Json     @default("{}")
+  version       Int
+  timestamp     DateTime @default(now())
+
+  @@unique([aggregateType, aggregateId, version])
+  @@index([aggregateType, aggregateId])
+  @@index([aggregateType, aggregateId, version])
+  @@index([timestamp])
+  @@index([eventType])
+}

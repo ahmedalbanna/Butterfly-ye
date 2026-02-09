@@ -1,0 +1,854 @@
+
+"use client"
+
+export const dynamic = 'force-dynamic';
+
+import Image from 'next/image';
+import { getHomePageData, GroupedProducts } from '@/lib/api/products';
+import { getOrdersByIds, OrderWithItems } from '@/lib/api/orders';
+import { ShoppingBag, Sparkles, MessageCircle, ChevronLeft, ChevronRight, Trash2, Plus, Minus, ArrowRight, ShieldCheck, ChevronDown, MousePointer2, Phone, Package, Clock, CheckCircle2, Truck, Bell, User, Star, Compass, Search as SearchIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { useEffect, useState, useRef } from 'react';
+import { cn } from '@/lib/utils';
+import { useCart } from '@/context/cart-context';
+import { useVoiceCall } from '@/context/voice-call-context';
+import { useChat } from '@/context/chat-context';
+import { useSearch } from '@/context/search-context';
+import { useToast } from '@/hooks/use-toast';
+import { useUser, useAuth } from '@/firebase';
+import { signOut } from 'firebase/auth';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
+import Link from 'next/link';
+import { ButterflyLogo } from '@/components/butterfly-logo';
+
+interface SparkleEffect {
+  id: number;
+  x: number;
+  y: number;
+}
+
+const TypewriterEffect = ({ text, delay = 0, speed = 30, active = false }: { text: string, delay?: number, speed?: number, active?: boolean }) => {
+  const [displayText, setDisplayText] = useState('');
+
+  useEffect(() => {
+    if (!active) {
+      setDisplayText('');
+      return;
+    }
+
+    let current = '';
+    let index = 0;
+    const initialTimeout = setTimeout(() => {
+      const interval = setInterval(() => {
+        if (index < text.length) {
+          current += text[index];
+          setDisplayText(current);
+          index++;
+        } else {
+          clearInterval(interval);
+        }
+      }, speed);
+      return () => clearInterval(interval);
+    }, delay);
+
+    return () => {
+      clearTimeout(initialTimeout);
+      setDisplayText('');
+    };
+  }, [text, active, delay, speed]);
+
+  return <span>{displayText}</span>;
+};
+
+export default function Home() {
+  const { cart, addToCart, removeFromCart, updateQuantity, cartTotal, cartCount } = useCart();
+  const { startCall } = useVoiceCall();
+  const { openChat } = useChat();
+  const { openSearch } = useSearch();
+  const { toast } = useToast();
+  const { user, isUserLoading } = useUser();
+  const auth = useAuth();
+
+  const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
+  const [activeProductIndices, setActiveProductIndices] = useState<Record<number, number>>({});
+  const [sparkles, setSparkles] = useState<SparkleEffect[]>([]);
+  const [isZoomed, setIsZoomed] = useState<Record<string, boolean>>({});
+  const [groupedProducts, setGroupedProducts] = useState<GroupedProducts[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Track orders
+  const [customerOrders, setCustomerOrders] = useState<OrderWithItems[]>([]);
+  const [isOrdersLoading, setIsOrdersLoading] = useState(false);
+  const [hasNewUpdates, setHasNewUpdates] = useState(false);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Fetch products from database on mount
+  useEffect(() => {
+    async function loadProducts() {
+      try {
+        const result = await getHomePageData();
+        
+        if (result.success && result.data) {
+          // Transform the grouped data into array format for the UI
+          const grouped = [];
+          
+          // Add featured products
+          if (result.data.featured && result.data.featured.length > 0) {
+            grouped.push({
+              name: 'Featured',
+              products: result.data.featured
+            });
+          }
+          
+          // Add products grouped by category
+          if (result.data.byCategory) {
+            Object.entries(result.data.byCategory).forEach(([categoryName, products]: [string, any]) => {
+              if (products && products.length > 0) {
+                grouped.push({
+                  name: categoryName,
+                  products: products
+                });
+              }
+            });
+          }
+          
+          setGroupedProducts(grouped);
+        } else {
+          // If API call fails, show fallback message but don't throw error
+          console.error('Failed to load products:', result.error);
+          setGroupedProducts([]);
+        }
+      } catch (error: any) {
+        console.error('Error loading products:', error);
+        // Don't show error toast on initial load - just log it
+        // User will see loading state or empty products
+        setGroupedProducts([]);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadProducts();
+  }, [toast]);
+
+  // Check for order status updates
+  const checkForOrderUpdates = async () => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      const savedIds = JSON.parse(localStorage.getItem('butterfly_orders') || '[]');
+      if (savedIds.length === 0) return;
+
+      const orders = await getOrdersByIds(savedIds);
+      const statusCache = JSON.parse(localStorage.getItem('butterfly_status_cache') || '{}');
+
+      let updatesFound = false;
+      const newCache: Record<string, string> = { ...statusCache };
+
+      orders.forEach(order => {
+        const previousStatus = statusCache[order.id];
+        if (previousStatus && previousStatus !== order.status) {
+          updatesFound = true;
+          // Show luxurious notification
+          toast({
+            title: "Order Update",
+            description: `Your order #${order.id.slice(-8).toUpperCase()} is now ${order.status.charAt(0).toUpperCase() + order.status.slice(1)}.`,
+            action: (
+              <Link href={`/order/${order.id}`}>
+                <Button variant="outline" size="sm" className="h-8 text-[10px] uppercase tracking-widest border-primary text-primary">
+                  Track Piece
+                </Button>
+              </Link>
+            )
+          });
+        }
+        newCache[order.id] = order.status;
+      });
+
+      if (updatesFound) {
+        setHasNewUpdates(true);
+        localStorage.setItem('butterfly_status_cache', JSON.stringify(newCache));
+      } else {
+        // Just refresh the cache silently if no updates but first time loading
+        localStorage.setItem('butterfly_status_cache', JSON.stringify(newCache));
+      }
+
+      setCustomerOrders(orders);
+    } catch (e) {
+      console.error('Error checking for order updates:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (!isLoading) {
+      checkForOrderUpdates();
+    }
+  }, [isLoading]);
+
+  const loadCustomerOrders = async () => {
+    if (typeof window === 'undefined') return;
+
+    setIsOrdersLoading(true);
+    setHasNewUpdates(false);
+    try {
+      const savedIds = JSON.parse(localStorage.getItem('butterfly_orders') || '[]');
+      if (savedIds.length > 0) {
+        const orders = await getOrdersByIds(savedIds);
+        setCustomerOrders(orders);
+
+        // Update cache when viewing
+        const newCache: Record<string, string> = {};
+        orders.forEach(o => newCache[o.id] = o.status);
+        localStorage.setItem('butterfly_status_cache', JSON.stringify(newCache));
+      }
+    } catch (e) {
+      console.error('Error loading local orders:', e);
+    } finally {
+      setIsOrdersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (groupedProducts.length === 0) return;
+    const initialIndices: Record<number, number> = {};
+    groupedProducts.forEach((_, idx) => {
+      initialIndices[idx] = 0;
+    });
+    setActiveProductIndices(initialIndices);
+
+    const categoryObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const index = Number(entry.target.getAttribute('data-category-index'));
+            setActiveCategoryIndex(index);
+          }
+        });
+      },
+      { threshold: 0.6 }
+    );
+
+    document.querySelectorAll('section[data-category-index]').forEach((section) => {
+      categoryObserver.observe(section);
+    });
+
+    const productObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const catIndex = Number(entry.target.getAttribute('data-parent-category-index'));
+            const prodIndex = Number(entry.target.getAttribute('data-product-index'));
+            setActiveProductIndices(prev => ({
+              ...prev,
+              [catIndex]: prodIndex
+            }));
+          }
+        });
+      },
+      { threshold: 0.6 }
+    );
+
+    document.querySelectorAll('div[data-product-index]').forEach((div) => {
+      productObserver.observe(div);
+    });
+
+    return () => {
+      categoryObserver.disconnect();
+      productObserver.disconnect();
+    };
+  }, [groupedProducts]);
+
+  const handleAddToCart = (product: any) => {
+    addToCart({
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      image: product.image
+    });
+    toast({
+      title: "Added to Bag",
+      description: `${product.name} has been added to your shopping bag.`,
+    });
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      toast({
+        title: "Signed Out",
+        description: "You have been successfully logged out.",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Could not sign out. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleImageInteraction = (e: React.MouseEvent<HTMLDivElement>, productId: string) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const newSparkle = { id: Date.now(), x, y };
+    setSparkles(prev => [...prev, newSparkle]);
+
+    setIsZoomed(prev => ({ ...prev, [productId]: !prev[productId] }));
+
+    setTimeout(() => {
+      setSparkles(prev => prev.filter(s => s.id !== newSparkle.id));
+    }, 1000);
+  };
+
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, string> = {
+      'pending': 'Processing',
+      'confirmed': 'Confirmed',
+      'shipped': 'Shipped',
+      'delivered': 'Delivered',
+      'cancelled': 'Cancelled'
+    };
+    return labels[status] || status;
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'pending': return <Clock className="w-4 h-4 text-yellow-500" />;
+      case 'confirmed': return <CheckCircle2 className="w-4 h-4 text-blue-500" />;
+      case 'shipped': return <Truck className="w-4 h-4 text-purple-500" />;
+      case 'delivered': return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+      default: return <Package className="w-4 h-4 text-gray-500" />;
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-black text-white">
+        <div className="text-center space-y-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
+          <p className="text-sm uppercase tracking-widest text-white/60">Loading Collection...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={containerRef} className="h-screen w-full overflow-y-scroll snap-y snap-mandatory bg-black hide-scrollbar selection:bg-primary selection:text-white box-border">
+      <style jsx global>{`
+        .hide-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+        .hide-scrollbar {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+        @keyframes sparkle-anim {
+          0% { transform: scale(0) rotate(0deg); opacity: 1; }
+          50% { transform: scale(1.5) rotate(180deg); opacity: 0.8; }
+          100% { transform: scale(2) rotate(360deg); opacity: 0; }
+        }
+        .animate-magic-sparkle {
+          animation: sparkle-anim 0.8s ease-out forwards;
+        }
+        @keyframes subtle-zoom {
+          0% { transform: scale(1); }
+          100% { transform: scale(1.08); }
+        }
+        .animate-subtle-zoom {
+          animation: subtle-zoom 20s infinite alternate ease-in-out;
+        }
+        .transition-content {
+          transition: all 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+      `}</style>
+
+      {/* Brand Logo */}
+      <div className="fixed top-4 left-4 md:top-8 md:left-12 z-50">
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="w-10 h-10 md:w-12 md:h-12 bg-white flex items-center justify-center rounded-full shadow-[0_0_20px_rgba(var(--primary),0.3)] border border-primary/20">
+            <ButterflyLogo className="w-6 h-6 md:w-8 md:h-8" />
+          </div>
+          <div>
+            <h2 className="text-lg md:text-2xl font-headline font-bold text-primary tracking-tighter drop-shadow-lg">Butterfly Store</h2>
+            <p className="text-[7px] uppercase tracking-[0.3em] text-white/40 font-bold -mt-1">Luxury Boutique</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Floating UI */}
+      <div className="fixed top-4 right-4 md:top-8 md:right-12 z-50 flex items-center gap-4">
+        {/* Search Trigger */}
+        <Button
+          onClick={openSearch}
+          variant="ghost"
+          size="icon"
+          className="text-white hover:bg-primary hover:scale-110 rounded-full h-10 w-10 md:h-12 md:w-12 border border-white/20 backdrop-blur-xl transition-all duration-500 bg-black/20"
+        >
+          <SearchIcon className="w-5 h-5 md:w-6 md:h-6" />
+        </Button>
+        {/* Account Button */}
+        {user ? (
+          <div className="flex items-center gap-2">
+            <Link href="/profile" title="View Portfolio">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-white hover:bg-primary hover:scale-110 rounded-full h-10 w-10 md:h-12 md:w-12 border border-white/20 backdrop-blur-xl transition-all duration-500 bg-black/20"
+              >
+                <User className="w-5 h-5 md:w-6 md:h-6" />
+              </Button>
+            </Link>
+          </div>
+        ) : (
+          <Link href="/login" title="Sign In">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-white hover:bg-primary hover:scale-110 rounded-full h-10 w-10 md:h-12 md:w-12 border border-white/20 backdrop-blur-xl transition-all duration-500 bg-black/20"
+            >
+              <User className="w-5 h-5 md:w-6 md:h-6" />
+            </Button>
+          </Link>
+        )}
+
+        {/* Order History Button */}
+        <Sheet onOpenChange={(open) => open && loadCustomerOrders()}>
+          <SheetTrigger asChild>
+            <div className="relative">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-white hover:bg-primary hover:scale-110 rounded-full h-10 w-10 md:h-12 md:w-12 border border-white/20 backdrop-blur-xl transition-all duration-500 bg-black/20"
+              >
+                <Package className="w-5 h-5 md:w-6 md:h-6" />
+                {hasNewUpdates && (
+                  <span className="absolute -top-1 -right-1 bg-primary text-white text-[8px] w-4 h-4 rounded-full flex items-center justify-center font-bold animate-pulse ring-2 ring-black">
+                    <Bell className="w-2 h-2" />
+                  </span>
+                )}
+              </Button>
+            </div>
+          </SheetTrigger>
+          <SheetContent side="right" className="bg-[#0a0a0a] border-r border-white/10 text-white w-full sm:max-w-md p-0 overflow-hidden flex flex-col box-border shadow-2xl">
+            <SheetHeader className="p-6 md:p-8 border-b border-white/10 bg-black/20 backdrop-blur-md">
+              <SheetTitle className="text-2xl md:text-3xl font-headline italic text-white flex items-center gap-3">
+                <Package className="text-primary" /> My Previous Orders
+              </SheetTitle>
+            </SheetHeader>
+
+            <ScrollArea className="flex-1 px-6 md:px-8 py-6">
+              {isOrdersLoading ? (
+                <div className="h-[50vh] flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                </div>
+              ) : customerOrders.length === 0 ? (
+                <div className="h-[50vh] flex flex-col items-center justify-center space-y-6 opacity-30">
+                  <div className="w-20 h-20 rounded-full border-2 border-dashed border-white/20 flex items-center justify-center">
+                    <Package className="w-10 h-10" />
+                  </div>
+                  <p className="font-body italic text-lg text-center px-4">No previous orders found.</p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {customerOrders.map((order) => (
+                    <div key={order.id} className="p-4 bg-white/5 border border-white/10 rounded-lg hover:border-primary/30 transition-all group">
+                      <div className="flex justify-between items-start mb-4">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-widest text-white/40 mb-1">Order ID</p>
+                          <p className="font-mono text-sm font-bold text-primary">#{order.id.slice(-8).toUpperCase()}</p>
+                        </div>
+                        <div className="text-right">
+                          <Badge variant="outline" className={cn(
+                            "flex items-center gap-1 border-white/10",
+                            order.status === 'delivered' ? 'text-green-400' : 'text-yellow-400'
+                          )}>
+                            {getStatusIcon(order.status)}
+                            <span className="ml-1">{getStatusLabel(order.status)}</span>
+                          </Badge>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 mb-4">
+                        {order.items.slice(0, 2).map((item) => (
+                          <div key={item.id} className="flex gap-3 items-center">
+                            <div className="relative w-10 h-12 rounded overflow-hidden flex-shrink-0">
+                              <Image src={item.product.image} alt={item.product.name} fill className="object-cover" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold truncate text-white/80">{item.product.name}</p>
+                              <p className="text-[10px] text-white/40">Qty: {item.quantity}</p>
+                            </div>
+                          </div>
+                        ))}
+                        {order.items.length > 2 && (
+                          <p className="text-[10px] text-primary italic">+{order.items.length - 2} more items...</p>
+                        )}
+                      </div>
+
+                      <div className="flex justify-between items-center pt-3 border-t border-white/10">
+                        <p className="text-xs text-white/60">{new Date(order.createdAt).toLocaleDateString()}</p>
+                        <Link href={`/order/${order.id}`}>
+                          <Button variant="link" size="sm" className="text-primary text-xs h-auto p-0">
+                            Full Details <ArrowRight className="w-3 h-3 ml-1" />
+                          </Button>
+                        </Link>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+          </SheetContent>
+        </Sheet>
+
+        {/* Shopping Cart Button */}
+        <Sheet>
+          <SheetTrigger asChild>
+            <div className="relative">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-white hover:bg-primary hover:scale-110 rounded-full h-10 w-10 md:h-12 md:w-12 border border-white/20 backdrop-blur-xl transition-all duration-500 bg-black/20"
+              >
+                <ShoppingBag className="w-5 h-5 md:w-6 md:h-6" />
+                {cartCount > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-primary text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold animate-in zoom-in ring-2 ring-black">
+                    {cartCount}
+                  </span>
+                )}
+              </Button>
+            </div>
+          </SheetTrigger>
+          <SheetContent side="right" className="bg-[#0a0a0a] border-l border-white/10 text-white w-full sm:max-w-md p-0 overflow-hidden flex flex-col box-border shadow-2xl">
+            <SheetHeader className="p-6 md:p-8 border-b border-white/10 bg-black/20 backdrop-blur-md">
+              <SheetTitle className="text-2xl md:text-3xl font-headline italic text-white flex items-center gap-3">
+                <ShoppingBag className="text-primary" /> Your Selection
+              </SheetTitle>
+            </SheetHeader>
+
+            <ScrollArea className="flex-1 px-6 md:px-8 py-6">
+              {cart.length === 0 ? (
+                <div className="h-[50vh] flex flex-col items-center justify-center space-y-6 opacity-30">
+                  <div className="w-20 h-20 rounded-full border-2 border-dashed border-white/20 flex items-center justify-center">
+                    <ShoppingBag className="w-10 h-10" />
+                  </div>
+                  <p className="font-body italic text-lg text-center px-4">Your boutique bag is empty.</p>
+                </div>
+              ) : (
+                <div className="space-y-8 md:space-y-10">
+                  {cart.map((item) => (
+                    <div key={item.id} className="flex gap-4 md:gap-6 group box-border animate-in fade-in slide-in-from-right-4 duration-500">
+                      <div className="relative w-20 h-28 md:w-24 md:h-32 bg-white/[0.03] shrink-0 overflow-hidden rounded-sm border border-white/5 transition-colors group-hover:border-primary/30">
+                        {item.image && (
+                          <Image src={item.image} alt={item.name} fill className="object-cover transition-transform duration-700 group-hover:scale-110" />
+                        )}
+                      </div>
+                      <div className="flex-1 flex flex-col justify-between py-1">
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="space-y-1">
+                            <h4 className="font-headline text-lg md:text-xl leading-tight group-hover:text-primary transition-colors line-clamp-2">{item.name}</h4>
+                            <p className="font-bold text-primary/80 text-sm">${item.price.toLocaleString()}</p>
+                          </div>
+                          <div className="flex gap-1 md:gap-2">
+                            <button
+                              onClick={() => removeFromCart(item.id)}
+                              className="text-white/20 hover:text-destructive transition-colors p-1"
+                              title="Remove Piece"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between mt-2 md:mt-4">
+                          <div className="flex items-center border border-white/10 rounded-sm bg-white/5 overflow-hidden">
+                            <button
+                              onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                              className="p-1.5 hover:bg-white/10 transition-colors disabled:opacity-20"
+                              disabled={item.quantity <= 1}
+                            >
+                              <Minus className="w-3 h-3" />
+                            </button>
+                            <span className="w-8 text-center text-xs font-bold font-mono">{item.quantity}</span>
+                            <button
+                              onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                              className="p-1.5 hover:bg-white/10 transition-colors"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <p className="font-bold text-primary text-sm md:text-base tracking-tighter">${(item.price * item.quantity).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+
+            {cart.length > 0 && (
+              <div className="p-6 md:p-8 bg-black/40 backdrop-blur-xl border-t border-white/10 space-y-4 md:space-y-6 box-border">
+                <div className="space-y-3">
+                  <div className="flex justify-between text-[10px] md:text-xs text-white/40 uppercase tracking-[0.2em]">
+                    <span>Subtotal</span>
+                    <span>${cartTotal.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-xl md:text-2xl font-headline italic">Estimated Total</span>
+                    <span className="text-2xl md:text-3xl font-headline font-bold text-primary">${cartTotal.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3">
+                  <Link href="/checkout" className="w-full">
+                    <Button
+                      className="w-full h-12 md:h-16 bg-primary text-white rounded-none uppercase tracking-[0.2em] font-bold hover:bg-white hover:text-primary transition-all duration-500 text-[10px] sm:text-xs md:text-sm box-border shadow-[0_4px_20px_rgba(var(--primary),0.2)]"
+                    >
+                      Process Order <ArrowRight className="ml-2 w-4 h-4" />
+                    </Button>
+                  </Link>
+                </div>
+                
+
+                <div className="flex items-center justify-center gap-2 text-[8px] md:text-[10px] text-white/30 uppercase tracking-[0.3em]">
+                  <ShieldCheck className="w-3 h-3 text-primary/50" /> Secure Boutique Checkout
+                </div>
+              </div>
+            )}
+          </SheetContent>
+        </Sheet>
+      </div>
+
+      {/* Main Sections */}
+      {groupedProducts.map((group, categoryIndex) => (
+        <section
+          key={group.name}
+          data-category-index={categoryIndex}
+          className="h-screen w-full snap-start relative flex overflow-x-scroll snap-x snap-mandatory hide-scrollbar bg-black box-border"
+        >
+          {group.products.map((product, productIndex) => {
+            const isVisible = activeCategoryIndex === categoryIndex && activeProductIndices[categoryIndex] === productIndex;
+            const zoomed = isZoomed[product.id];
+
+            // Get category slug if available (assuming categories data is indexed same way)
+            const categorySlug = group.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+
+            return (
+              <div
+                key={product.id}
+                data-parent-category-index={categoryIndex}
+                data-product-index={productIndex}
+                className="h-screen w-screen snap-center shrink-0 relative flex flex-col lg:flex-row items-center overflow-hidden bg-black box-border"
+              >
+                {/* Product Visuals */}
+                <div
+                  onClick={(e) => handleImageInteraction(e, product.id)}
+                  className="w-full lg:w-1/2 h-[40vh] md:h-[45vh] lg:h-full relative overflow-hidden bg-muted/10 group/media cursor-crosshair box-border"
+                >
+                  {product.video ? (
+                    <video
+                      src={product.video}
+                      autoPlay
+                      loop
+                      muted
+                      playsInline
+                      className={cn(
+                        "w-full h-full object-cover transition-all duration-1000",
+                        isVisible ? "opacity-100" : "opacity-0",
+                        zoomed ? "scale-125 brightness-110" : "scale-100"
+                      )}
+                    />
+                  ) : product.image && (
+                    <Image
+                      src={product.image}
+                      alt={product.name}
+                      fill
+                      priority={categoryIndex === 0 && productIndex === 0}
+                      className={cn(
+                        "object-cover transition-all duration-1000",
+                        isVisible ? "opacity-100" : "opacity-0",
+                        isVisible && !zoomed ? "animate-subtle-zoom" : "",
+                        zoomed ? "scale-125 brightness-110" : "scale-100"
+                      )}
+                      sizes="(max-width: 1024px) 100vw, 50vw"
+                    />
+                  )}
+
+                  {/* Magic Sparkles */}
+                  {sparkles.map(sparkle => (
+                    <div
+                      key={sparkle.id}
+                      className="absolute z-50 pointer-events-none animate-magic-sparkle"
+                      style={{ left: sparkle.x, top: sparkle.y }}
+                    >
+                      <Sparkles className="text-primary w-6 h-6 -translate-x-1/2 -translate-y-1/2" />
+                    </div>
+                  ))}
+
+                  <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent lg:bg-gradient-to-r lg:from-transparent lg:to-black pointer-events-none" />
+
+                  {/* Tap Hint */}
+                  {isVisible && (
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none">
+                      <div className="bg-black/40 backdrop-blur-md px-4 py-2 rounded-full border border-white/20 flex items-center gap-2">
+                        <MousePointer2 className="w-3 h-3 text-primary animate-pulse" />
+                        <span className="text-[8px] uppercase tracking-widest font-bold text-white">Tap to Explore Detail</span>
+                        {product.featured && <div className="absolute top-24 left-12 animate-in fade-in slide-in-from-left-4 duration-1000"><Badge className="bg-primary/20 text-primary border border-primary/50 rounded-none px-4 py-2 uppercase tracking-[0.3em] text-[10px] font-bold backdrop-blur-xl"><Star className="w-3 h-3 mr-2 fill-current" /> Boutique Spotlight</Badge></div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Product Info */}
+                <div className="w-full lg:w-1/2 h-[60vh] md:h-[55vh] lg:h-full relative z-10 flex flex-col justify-center px-6 md:px-12 lg:px-20 xl:px-32 text-white bg-black box-border overflow-hidden">
+                  <div className="max-w-xl w-full space-y-6 md:space-y-10 box-border overflow-hidden">
+
+                    {/* Category Header */}
+                    <div className={cn(
+                      "transition-content",
+                      isVisible ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-10'
+                    )}>
+                      <div className="flex items-center gap-4 mb-2">
+                        <Link href={`/${categorySlug}`} className="group/cat">
+                          <span className="inline-flex items-center gap-2 py-1 px-3 md:px-4 bg-primary/20 border border-primary/50 text-primary font-bold tracking-[0.3em] uppercase text-[8px] md:text-[10px] backdrop-blur-md rounded-full group-hover/cat:bg-primary group-hover/cat:text-black transition-all">
+                            {group.name}
+                            <Compass className="w-3 h-3 ml-1" />
+                          </span>
+                        </Link>
+                        <div className="h-[1px] flex-1 bg-white/10" />
+                      </div>
+                      <p className="text-[8px] md:text-[10px] text-white/40 uppercase tracking-[0.4em] font-medium">Piece 0{productIndex + 1} / 0{group.products.length}</p>
+                    </div>
+
+                    {/* Title with Typewriter & Clipping */}
+                    <div className={cn(
+                      "transition-content delay-100",
+                      isVisible ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-10'
+                    )}>
+                      <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl xl:text-7xl font-headline italic leading-tight md:leading-none min-h-[1.2em] line-clamp-2 overflow-hidden">
+                        <TypewriterEffect text={product.name} active={isVisible} speed={50} />
+                      </h1>
+                    </div>
+
+                    {/* Details Grid with Fixed Spacing */}
+                    <div className={cn(
+                      "grid grid-cols-1 sm:grid-cols-2 gap-6 lg:gap-12 border-l-2 border-primary/30 pl-6 lg:pl-8 transition-content delay-200",
+                      isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+                    )}>
+                      <div className="space-y-1 overflow-hidden">
+                        <p className="text-[8px] md:text-[9px] uppercase tracking-[0.3em] text-primary font-bold">Market Price</p>
+                        <p className="text-2xl md:text-4xl lg:text-5xl font-body font-light tabular-nums truncate">
+                          <span className="text-primary text-lg md:text-2xl mr-1">$</span>
+                          <TypewriterEffect text={product.price.toLocaleString()} active={isVisible} speed={40} delay={600} />
+                        </p>
+                      </div>
+                      <div className="space-y-1 overflow-hidden">
+                        <p className="text-[8px] md:text-[9px] uppercase tracking-[0.3em] text-primary font-bold">Materials</p>
+                        <p className="text-xs md:text-base lg:text-lg italic font-body text-white/80 leading-relaxed min-h-[3em] line-clamp-2 overflow-hidden">
+                          <TypewriterEffect text={product.materials} active={isVisible} speed={25} delay={1000} />
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Actions with Clipping Safety - Simplified to 2 main buttons */}
+                    <div className={cn(
+                      "flex flex-col sm:flex-row gap-3 md:gap-4 pt-4 md:pt-8 transition-content delay-300 w-full box-border",
+                      isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'
+                    )}>
+                      <Button
+                        onClick={() => handleAddToCart(product)}
+                        className="flex-1 min-w-[140px] bg-primary hover:bg-white hover:text-primary text-white rounded-none h-12 md:h-16 text-[10px] sm:text-xs md:text-sm font-bold uppercase tracking-widest transition-all duration-500 box-border overflow-hidden"
+                      >
+                        <ShoppingBag className="mr-2 h-4 w-4 shrink-0" /> <span className="truncate">Add To Bag</span>
+                      </Button>
+                      <Link href={`/${categorySlug}`} className="flex-1">
+                        <Button variant="outline" className="w-full h-12 md:h-16 border-white/20 text-white/60 hover:text-primary hover:border-primary rounded-none text-[10px] sm:text-xs md:text-sm font-bold uppercase tracking-widest transition-all duration-500 box-border overflow-hidden">
+                          Explore Collection
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Progress Dot Bar (Mobile) */}
+                <div className="absolute bottom-16 left-0 w-full flex justify-center lg:hidden gap-1.5 z-40 px-6 box-border">
+                  {group.products.map((_, i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        "h-1 transition-all duration-500 rounded-full",
+                        productIndex === i ? "w-8 bg-primary" : "w-3 bg-white/20"
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      ))}
+
+      {/* Floating Buttons */}
+      <div className="fixed bottom-6 left-6 md:bottom-12 md:left-12 z-50 flex flex-col gap-4">
+        {/* Side Nav Dots */}
+        <div className="fixed right-6 lg:right-12 top-1/2 -translate-y-1/2 hidden md:flex flex-col gap-8 z-40 p-4 rounded-full bg-black/5 backdrop-blur-[2px] border border-white/5">
+          {groupedProducts.map((group, i) => (
+            <button
+              key={i}
+              onClick={() => document.querySelectorAll('section[data-category-index]')[i].scrollIntoView({ behavior: 'smooth' })}
+              className="group relative flex items-center justify-end"
+            >
+              <div className="absolute right-10 flex flex-col items-end opacity-0 group-hover:opacity-100 transition-all duration-500 pointer-events-none translate-x-4 group-hover:translate-x-0">
+                <div className="bg-black/60 backdrop-blur-md px-3 py-1 border border-white/10 rounded-sm shadow-xl">
+                  <span className="text-[9px] uppercase tracking-[0.3em] font-bold text-primary whitespace-nowrap">{group.name}</span>
+                </div>
+              </div>
+              <div
+                className={cn(
+                  "w-2 h-2 rounded-full transition-all duration-700 border",
+                  activeCategoryIndex === i
+                    ? 'bg-primary border-primary scale-[2.5] shadow-[0_0_15px_hsl(var(--primary)/0.6)]'
+                    : 'bg-white/10 border-white/20 hover:bg-white/40 hover:scale-125'
+                )}
+              />
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* AI Stylist Floating Button */}
+      <div className="fixed bottom-6 right-6 md:bottom-12 md:right-12 z-50">
+        <Button
+          onClick={openChat}
+          className="w-14 h-14 md:w-16 md:h-16 rounded-full bg-primary hover:bg-white hover:text-primary text-white shadow-2xl transition-all duration-500 flex items-center justify-center group"
+        >
+          <div className="absolute inset-0 rounded-full bg-primary/20 animate-ping opacity-50" />
+          <MessageCircle className="w-6 h-6 md:w-8 md:h-8 group-hover:scale-110 transition-transform" />
+        </Button>
+      </div>
+
+      {/* Unified Help Overlay */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-8 text-white/40 z-40 pointer-events-none px-6 backdrop-blur-sm py-2 rounded-full border border-white/5 bg-black/20 box-border">
+        <div className="flex items-center gap-2">
+          <ChevronLeft className="w-3 h-3 text-primary animate-pulse" />
+          <span className="text-[7px] md:text-[9px] uppercase tracking-[0.2em] font-bold text-white">Swipe Designs</span>
+          <ChevronRight className="w-3 h-3 text-primary animate-pulse" />
+        </div>
+        <div className="w-px h-4 bg-white/20" />
+        <div className="flex items-center gap-2">
+          <span className="text-[7px] md:text-[9px] uppercase tracking-[0.2em] font-bold text-white">Explore Categories</span>
+          <ChevronDown className="w-4 h-4 text-primary animate-bounce" />
+        </div>
+      </div>
+    </div>
+  );
+}
